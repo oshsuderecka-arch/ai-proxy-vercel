@@ -1,251 +1,321 @@
 <?php
-// Vercel API endpoint для ИИ-прокси
+// Vercel API endpoint для ИИ-прокси (универсальный)
+declare(strict_types=1);
+
 header('Content-Type: application/json; charset=utf-8');
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: POST, GET, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization');
+header('Access-Control-Allow-Headers: Content-Type, Authorization, User-Agent');
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-    http_response_code(200);
-    exit;
+  http_response_code(204); exit;
 }
 
+/* ---------- Health-check на GET ---------- */
+if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+  echo json_encode([
+    'ok' => true,
+    'message' => 'Vercel API работает!',
+    'timestamp' => gmdate('Y-m-d H:i:s'),
+    'environment' => [
+      'vercel' => true,
+      'openai_key_set' => !!getenv('OPENAI_API_KEY'),
+      'gemini_key_set' => !!getenv('GEMINI_API_KEY'),
+      'php_version' => PHP_VERSION,
+      'request_method' => 'GET',
+      'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? ''
+    ]
+  ], JSON_UNESCAPED_UNICODE);
+  exit;
+}
+
+/* ---------- Только POST дальше ---------- */
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    http_response_code(405);
-    echo json_encode(['ok' => false, 'error' => 'Method not allowed']);
-    exit;
+  http_response_code(405);
+  echo json_encode(['ok'=>false,'error'=>'Method not allowed']); exit;
 }
 
+/* ---------- Ввод ---------- */
 $input = file_get_contents('php://input');
-$data = json_decode($input, true);
-
-if (!$data) {
-    http_response_code(400);
-    echo json_encode(['ok' => false, 'error' => 'Invalid JSON']);
-    exit;
+$data  = json_decode($input, true);
+if (!is_array($data)) {
+  http_response_code(400);
+  echo json_encode(['ok'=>false,'error'=>'Invalid JSON']); exit;
 }
 
-$provider = $data['provider'] ?? 'openai';
-$model = $data['model'] ?? 'gpt-4o-mini';
-$messages = $data['messages'] ?? [];
-$temperature = $data['temperature'] ?? 0.6;
-$max_tokens = $data['max_tokens'] ?? 2000;
+/* ---------- Параметры ---------- */
+$provider        = (string)($data['provider'] ?? 'openai');
+$model           = (string)($data['model']    ?? 'gpt-4o-mini');
+$messages        = $data['messages']          ?? null;
+$prompt          = isset($data['prompt']) ? (string)$data['prompt'] : null; // поддержка "prompt"
+$temperature     = is_numeric($data['temperature'] ?? null) ? (float)$data['temperature'] : 0.6;
+$max_tokens      = is_numeric($data['max_tokens']  ?? null) ? (int)$data['max_tokens']  : 2000;
 $response_format = $data['response_format'] ?? null;
 
-// Получаем API ключи из переменных окружения Vercel
-$openai_key = getenv('OPENAI_API_KEY');
-$gemini_key = getenv('GEMINI_API_KEY');
+/* ---------- Конвертация prompt→messages при необходимости ---------- */
+if (!$messages && $prompt !== null) {
+  $messages = [
+    ['role' => 'system', 'content' => 'Return ONLY a JSON object if requested; otherwise, concise text.'],
+    ['role' => 'user',   'content' => $prompt]
+  ];
+} elseif (!is_array($messages)) {
+  http_response_code(400);
+  echo json_encode(['ok'=>false,'error'=>'messages or prompt required']); exit;
+}
 
-// Пробуем разные API в порядке приоритета
-$success = false;
-$response_text = '';
+/* ---------- Ключи из ENV ---------- */
+$openai_key = getenv('OPENAI_API_KEY') ?: '';
+$gemini_key = getenv('GEMINI_API_KEY') ?: '';
 
-// 1. Пробуем OpenAI напрямую
-if ($openai_key && !$success) {
-    try {
-        $api_url = 'https://api.openai.com/v1/chat/completions';
-        
-        $payload = [
-            'model' => $model,
-            'messages' => $messages,
-            'temperature' => $temperature,
-            'max_tokens' => $max_tokens
-        ];
-        
-        if ($response_format) {
-            $payload['response_format'] = $response_format;
+/* ---------- Утилиты ---------- */
+function http_post_json(string $url, array $payload, array $headers=[], int $timeout=60): array {
+  $ch = curl_init($url);
+  curl_setopt_array($ch, [
+    CURLOPT_RETURNTRANSFER => true,
+    CURLOPT_POST           => true,
+    CURLOPT_HTTPHEADER     => array_merge(['Content-Type: application/json'], $headers),
+    CURLOPT_POSTFIELDS     => json_encode($payload, JSON_UNESCAPED_UNICODE),
+    CURLOPT_TIMEOUT        => $timeout,
+    CURLOPT_SSL_VERIFYPEER => true,
+  ]);
+  $body = curl_exec($ch);
+  $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+  $err  = curl_error($ch);
+  curl_close($ch);
+  return [$code, $body, $err];
+}
+
+/* ---------- Система замены абстрактных вариантов ---------- */
+function replaceAbstractOptions(array $items, string $topic): array {
+    $replacements = [
+        'сетевые технологии' => [
+            'основной принцип' => 'TCP/IP',
+            'ключевой фактор' => 'HTTP',
+            'характерная черта' => 'Wi-Fi',
+            'важное условие' => 'Ethernet',
+            'основная характеристика' => 'DNS',
+            'важное свойство' => 'VPN',
+            'необходимое требование' => 'FTP',
+            'специфическая особенность' => 'SSH'
+        ],
+        'программирование' => [
+            'основной принцип' => 'Python',
+            'ключевой фактор' => 'JavaScript',
+            'характерная черта' => 'Java',
+            'важное условие' => 'C++',
+            'основная характеристика' => 'Git',
+            'важное свойство' => 'Docker',
+            'необходимое требование' => 'MySQL',
+            'специфическая особенность' => 'React'
+        ],
+        'математика' => [
+            'основной принцип' => 'Производная',
+            'ключевой фактор' => 'Интеграл',
+            'характерная черта' => 'Матрица',
+            'важное условие' => 'Вектор',
+            'основная характеристика' => 'Функция',
+            'важное свойство' => 'График',
+            'необходимое требование' => 'Уравнение',
+            'специфическая особенность' => 'Теорема'
+        ]
+    ];
+
+    $topic_key = 'общая тема';
+    $topic_lower = mb_strtolower($topic, 'UTF-8');
+
+    if (strpos($topic_lower, 'сетев') !== false || strpos($topic_lower, 'network') !== false) {
+        $topic_key = 'сетевые технологии';
+    } elseif (strpos($topic_lower, 'программ') !== false || strpos($topic_lower, 'programming') !== false || strpos($topic_lower, 'код') !== false) {
+        $topic_key = 'программирование';
+    } elseif (strpos($topic_lower, 'математ') !== false || strpos($topic_lower, 'math') !== false) {
+        $topic_key = 'математика';
+    }
+
+    // Дополнительная проверка по заголовку вопроса
+    foreach ($items as $item) {
+        $title_lower = mb_strtolower($item['title'] ?? '', 'UTF-8');
+        if (strpos($title_lower, 'программ') !== false || strpos($title_lower, 'код') !== false) {
+            $topic_key = 'программирование';
+            break;
+        } elseif (strpos($title_lower, 'сетев') !== false || strpos($title_lower, 'протокол') !== false) {
+            $topic_key = 'сетевые технологии';
+            break;
+        } elseif (strpos($title_lower, 'математ') !== false || strpos($title_lower, 'функц') !== false) {
+            $topic_key = 'математика';
+            break;
         }
-        
-        $ch = curl_init($api_url);
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_POST => true,
-            CURLOPT_HTTPHEADER => [
-                'Authorization: Bearer ' . $openai_key,
-                'Content-Type: application/json',
-                'User-Agent: MyTE-Vercel-Proxy/1.0'
-            ],
-            CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE),
-            CURLOPT_TIMEOUT => 60,
-            CURLOPT_SSL_VERIFYPEER => true
-        ]);
-        
-        $resp = curl_exec($ch);
-        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $error = curl_error($ch);
-        curl_close($ch);
-        
-        if (!$error && $http_code >= 200 && $http_code < 300) {
-            $result = json_decode($resp, true);
-            if ($result && isset($result['choices'][0]['message']['content'])) {
-                $response_text = $result['choices'][0]['message']['content'];
-                $success = true;
+    }
+
+    $replacement_map = $replacements[$topic_key] ?? [];
+
+    foreach ($items as &$item) {
+        if (isset($item['options']) && is_array($item['options'])) {
+            foreach ($item['options'] as &$option) {
+                $option_text_lower = mb_strtolower($option['text'] ?? '', 'UTF-8');
+                if (isset($replacement_map[$option_text_lower])) {
+                    $option['text'] = $replacement_map[$option_text_lower];
+                }
             }
-        } else {
-            error_log('OpenAI API error: HTTP ' . $http_code . ' - ' . $resp);
         }
-    } catch (Exception $e) {
-        error_log('OpenAI API error: ' . $e->getMessage());
     }
+    return $items;
 }
 
-// 2. Пробуем Gemini API напрямую
-if ($gemini_key && !$success) {
-    try {
-        $api_url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
-        
-        $payload = [
-            'contents' => [
-                ['parts' => [['text' => $messages[count($messages)-1]['content']]]]
-            ],
-            'generationConfig' => [
-                'temperature' => $temperature,
-                'maxOutputTokens' => $max_tokens
-            ]
-        ];
-        
-        $ch = curl_init($api_url . '?key=' . $gemini_key);
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_POST => true,
-            CURLOPT_HTTPHEADER => [
-                'Content-Type: application/json',
-                'User-Agent: MyTE-Vercel-Proxy/1.0'
-            ],
-            CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE),
-            CURLOPT_TIMEOUT => 60,
-            CURLOPT_SSL_VERIFYPEER => true
-        ]);
-        
-        $resp = curl_exec($ch);
-        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $error = curl_error($ch);
-        curl_close($ch);
-        
-        if (!$error && $http_code >= 200 && $http_code < 300) {
-            $result = json_decode($resp, true);
-            if ($result && isset($result['candidates'][0]['content']['parts'][0]['text'])) {
-                $response_text = $result['candidates'][0]['content']['parts'][0]['text'];
-                $success = true;
+/* ---------- 1) OpenAI ---------- */
+if ($openai_key) {
+  try {
+    $payload = [
+      'model'       => $model,             // напр. gpt-4o-mini
+      'messages'    => $messages,
+      'temperature' => $temperature,
+      'max_tokens'  => $max_tokens,
+    ];
+    if ($response_format) {
+      $payload['response_format'] = $response_format; // json_object / json_schema / …
+    }
+
+    [$code, $body, $err] = http_post_json(
+      'https://api.openai.com/v1/chat/completions',
+      $payload,
+      ['Authorization: Bearer '.$openai_key, 'User-Agent: MyTE-Vercel-Proxy/1.0']
+    );
+
+    if ($code >= 200 && $code < 300 && $body) {
+      $res = json_decode($body, true);
+      $text = $res['choices'][0]['message']['content'] ?? null;
+      if ($text !== null) {
+        // Применяем систему замены
+        try {
+          $parsed = json_decode($text, true);
+          if ($parsed && isset($parsed['items']) && is_array($parsed['items'])) {
+            // Определяем тему из сообщений
+            $topic = '';
+            foreach ($messages as $msg) {
+              if (isset($msg['content']) && is_string($msg['content'])) {
+                if (preg_match('/теме\s+[\'"]([^\'"]+)[\'"]/', $msg['content'], $matches)) {
+                  $topic = $matches[1];
+                  break;
+                }
+              }
             }
-        } else {
-            error_log('Gemini API error: HTTP ' . $http_code . ' - ' . $resp);
+            $parsed['items'] = replaceAbstractOptions($parsed['items'], $topic);
+            $text = json_encode($parsed, JSON_UNESCAPED_UNICODE);
+          }
+        } catch (Throwable $e) {
+          error_log('[Vercel] Option replacement failed: ' . $e->getMessage());
         }
-    } catch (Exception $e) {
-        error_log('Gemini API error: ' . $e->getMessage());
+        
+        echo json_encode(['ok'=>true,'text'=>$text,'source'=>'openai'], JSON_UNESCAPED_UNICODE);
+        exit;
+      }
     }
+    error_log('OpenAI error: HTTP '.$code.' | '.$err.' | '.substr((string)$body,0,500));
+  } catch (Throwable $e) {
+    error_log('OpenAI exception: '.$e->getMessage());
+  }
 }
 
-// 3. Fallback - генерируем простые вопросы локально
-if (!$success) {
-    $response_text = generateFallbackQuestions($messages, $temperature);
-    $success = true;
-}
+/* ---------- 2) Gemini ---------- */
+if ($gemini_key) {
+  try {
+    // Поддержим переопределение модели через $model, если она начинается с "gemini-"
+    $gem_model = (stripos($model, 'gemini-') === 0) ? $model : 'gemini-1.5-flash';
 
-if ($success) {
-    echo json_encode([
-        'ok' => true,
-        'text' => $response_text,
-        'source' => 'vercel-proxy'
-    ]);
-} else {
-    http_response_code(500);
-    echo json_encode([
-        'ok' => false,
-        'error' => 'All API providers failed'
-    ]);
-}
-
-function generateFallbackQuestions($messages, $temperature) {
-    // Простая генерация контента без внешних API
-    $system_message = '';
-    $user_message = '';
-    
-    foreach ($messages as $msg) {
-        if ($msg['role'] === 'system') {
-            $system_message = $msg['content'];
-        } elseif ($msg['role'] === 'user') {
-            $user_message = $msg['content'];
-        }
+    // Берём последний user/assistant/system контент и склеиваем — Gemini ест plain text
+    $joined = '';
+    foreach ((array)$messages as $m) {
+      $joined .= (string)($m['content'] ?? '')."\n";
     }
-    
-    // Извлекаем тему
-    preg_match('/Тема:\s*([^\n]+)/', $user_message, $topic_matches);
-    $topic = isset($topic_matches[1]) ? trim($topic_matches[1]) : 'общая тема';
-    
-    // Извлекаем количество вопросов
-    preg_match('/Сгенерируй (\d+) вопросов/', $user_message, $matches);
-    $count = isset($matches[1]) ? (int)$matches[1] : 3;
-    
-    $questions = [];
-    for ($i = 0; $i < $count; $i++) {
-        $question_types = ['radio', 'checkbox'];
-        $type = $question_types[array_rand($question_types)];
-        
-        $templates = [
-            'radio' => [
-                'Что является основным принципом ' . $topic . '?',
-                'Какая характеристика наиболее важна для ' . $topic . '?',
-                'Что определяет эффективность ' . $topic . '?',
-                'Какой подход лучше всего подходит для ' . $topic . '?',
-                'Что является ключевым фактором в ' . $topic . '?'
-            ],
-            'checkbox' => [
-                'Какие из следующих утверждений верны для ' . $topic . '?',
-                'Отметьте все правильные характеристики ' . $topic . '.',
-                'Выберите все верные принципы ' . $topic . '.',
-                'Какие методы используются в ' . $topic . '?',
-                'Отметьте все важные аспекты ' . $topic . '.'
-            ],
-        ];
-        
-        $title = $templates[$type][array_rand($templates[$type])];
-        
-        $question = [
-            'type' => $type,
-            'title' => $title,
-            'required' => true,
-            'points' => 1
-        ];
-        
-        if ($type === 'radio' || $type === 'checkbox') {
-            $option_templates = [
-                'Основной принцип',
-                'Важное условие', 
-                'Ключевой фактор',
-                'Специфическая особенность',
-                'Характерная черта',
-                'Необходимое требование',
-                'Основная характеристика',
-                'Важное свойство'
-            ];
-            
-            $options = [];
-            $correct_count = ($type === 'radio') ? 1 : rand(2, 3);
-            $used_options = [];
-            
-            for ($j = 0; $j < 4; $j++) {
-                do {
-                    $option_text = $option_templates[array_rand($option_templates)];
-                } while (in_array($option_text, $used_options));
-                
-                $used_options[] = $option_text;
-                $is_correct = ($j < $correct_count);
-                
-                $options[] = [
-                    'text' => $option_text,
-                    'correct' => $is_correct
-                ];
+
+    $payload = [
+      'contents' => [
+        ['parts' => [['text' => $joined]]]
+      ],
+      'generationConfig' => [
+        'temperature' => $temperature,
+        'maxOutputTokens' => $max_tokens
+      ]
+    ];
+
+    $url = "https://generativelanguage.googleapis.com/v1beta/models/{$gem_model}:generateContent?key={$gemini_key}";
+    [$code, $body, $err] = http_post_json($url, $payload, ['User-Agent: MyTE-Vercel-Proxy/1.0']);
+
+    if ($code >= 200 && $code < 300 && $body) {
+      $res  = json_decode($body, true);
+      $text = $res['candidates'][0]['content']['parts'][0]['text'] ?? null;
+      if ($text !== null) {
+        // Применяем систему замены
+        try {
+          $parsed = json_decode($text, true);
+          if ($parsed && isset($parsed['items']) && is_array($parsed['items'])) {
+            // Определяем тему из сообщений
+            $topic = '';
+            foreach ($messages as $msg) {
+              if (isset($msg['content']) && is_string($msg['content'])) {
+                if (preg_match('/теме\s+[\'"]([^\'"]+)[\'"]/', $msg['content'], $matches)) {
+                  $topic = $matches[1];
+                  break;
+                }
+              }
             }
-            
-            // Перемешиваем варианты
-            shuffle($options);
-            $question['options'] = $options;
+            $parsed['items'] = replaceAbstractOptions($parsed['items'], $topic);
+            $text = json_encode($parsed, JSON_UNESCAPED_UNICODE);
+          }
+        } catch (Throwable $e) {
+          error_log('[Vercel] Option replacement failed: ' . $e->getMessage());
         }
         
-        $questions[] = $question;
+        echo json_encode(['ok'=>true,'text'=>$text,'source'=>'gemini'], JSON_UNESCAPED_UNICODE);
+        exit;
+      }
     }
-    
-    return json_encode(['items' => $questions], JSON_UNESCAPED_UNICODE);
+    error_log('Gemini error: HTTP '.$code.' | '.$err.' | '.substr((string)$body,0,500));
+  } catch (Throwable $e) {
+    error_log('Gemini exception: '.$e->getMessage());
+  }
 }
-?>
+
+/* ---------- 3) Fallback (минимально пригодный) ---------- */
+function fallback_payload(array $messages): string {
+  // Пытаемся вытащить тему и число
+  $topic = 'тема курса';
+  $count = 6;
+  foreach ($messages as $m) {
+    if (!empty($m['content'])) {
+      if (preg_match('/Тема:\s*([^\n]+)/u', $m['content'], $mm)) $topic = trim($mm[1]);
+      if (preg_match('/Сгенерируй\s+(\d+)\s+вопрос/iu', $m['content'], $cm)) $count = max(3, min(12, (int)$cm[1]));
+    }
+  }
+  $items = [];
+  for ($i=1; $i<=$count; $i++) {
+    $isRadio = ($i % 2 === 1);
+    $opts = [];
+    // генерируем простые, но не запрещённые и «привязанные» к теме варианты
+    $variants = [
+      "{$topic}: базовое понятие",
+      "{$topic}: ключевой термин",
+      "{$topic}: пример применения",
+      "{$topic}: типичный инструмент",
+      "{$topic}: распространённая ошибка",
+      "{$topic}: верное утверждение",
+    ];
+    shuffle($variants);
+    $n = $isRadio ? 4 : 5;
+    for ($k=0; $k<$n; $k++) $opts[] = ['text'=>$variants[$k], 'correct'=>false];
+    if ($isRadio) { $opts[0]['correct'] = true; } else { $opts[0]['correct'] = $opts[1]['correct'] = true; }
+    $items[] = [
+      'type' => $isRadio ? 'radio' : 'checkbox',
+      'title'=> "Вопрос {$i} по теме {$topic}",
+      'required'=> true,
+      'points'=> 1,
+      'options'=> $opts
+    ];
+  }
+  return json_encode(['items'=>$items], JSON_UNESCAPED_UNICODE);
+}
+
+echo json_encode([
+  'ok' => true,
+  'text' => fallback_payload($messages),
+  'source' => 'fallback'
+], JSON_UNESCAPED_UNICODE);
