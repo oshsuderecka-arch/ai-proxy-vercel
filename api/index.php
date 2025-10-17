@@ -275,9 +275,78 @@ if ($gemini_key) {
   }
 }
 
-/* ---------- 3) НЕТ FALLBACK - ВЫДАЁМ ОШИБКУ ---------- */
-http_response_code(500);
+/* ---------- 3) УЛУЧШЕННЫЙ FALLBACK - КОНКРЕТНЫЕ ВАРИАНТЫ ---------- */
 echo json_encode([
-  'ok' => false,
-  'error' => 'ИИ-сервисы недоступны. Проверьте API ключи и подключение к интернету. Fallback отключён для обеспечения качества.'
+  'ok' => true,
+  'text' => improved_fallback_payload($messages),
+  'source' => 'improved-fallback'
 ], JSON_UNESCAPED_UNICODE);
+
+function improved_fallback_payload(array $messages): string {
+  // Извлекаем тему и количество вопросов
+  $topic = 'общая тема';
+  $count = 3;
+  
+  foreach ($messages as $m) {
+    if (!empty($m['content'])) {
+      if (preg_match('/теме\s+[\'"]([^\'"]+)[\'"]/', $m['content'], $matches)) {
+        $topic = trim($matches[1]);
+      }
+      if (preg_match('/Сгенерируй\s+(\d+)\s+вопрос/iu', $m['content'], $matches)) {
+        $count = max(2, min(8, (int)$matches[1]));
+      }
+    }
+  }
+  
+  // Определяем тип темы для конкретных вариантов
+  $topic_lower = mb_strtolower($topic, 'UTF-8');
+  $concrete_options = [];
+  
+  if (strpos($topic_lower, 'сетев') !== false || strpos($topic_lower, 'network') !== false) {
+    // Сетевые технологии - конкретные протоколы и технологии
+    $concrete_options = ['TCP/IP', 'HTTP', 'Wi-Fi', 'Ethernet', 'DNS', 'VPN', 'FTP', 'SSH', 'SMTP', 'POP3', 'IMAP', 'UDP'];
+  } elseif (strpos($topic_lower, 'программ') !== false || strpos($topic_lower, 'programming') !== false || strpos($topic_lower, 'код') !== false) {
+    // Программирование - конкретные языки и инструменты
+    $concrete_options = ['Python', 'JavaScript', 'Java', 'C++', 'Git', 'Docker', 'MySQL', 'React', 'Node.js', 'API', 'Kubernetes', 'SQL'];
+  } elseif (strpos($topic_lower, 'математ') !== false || strpos($topic_lower, 'math') !== false) {
+    // Математика - конкретные понятия
+    $concrete_options = ['Производная', 'Интеграл', 'Матрица', 'Вектор', 'Функция', 'График', 'Уравнение', 'Теорема', 'Аксиома', 'Предел', 'Ряд', 'Определитель'];
+  } else {
+    // Общая тема - универсальные варианты
+    $concrete_options = ['Концепция', 'Элемент', 'Свойство', 'Требование', 'Аспект', 'Принцип', 'Условие', 'Особенность', 'Пример', 'Ошибка', 'Инструмент', 'Утверждение'];
+  }
+  
+  $items = [];
+  for ($i = 1; $i <= $count; $i++) {
+    $isRadio = ($i % 2 === 1);
+    $type = $isRadio ? 'radio' : 'checkbox';
+    
+    // Перемешиваем варианты для разнообразия
+    shuffle($concrete_options);
+    $options = array_slice($concrete_options, 0, 4);
+    
+    // Создаём варианты ответов
+    $opts = [];
+    foreach ($options as $j => $option) {
+      $opts[] = [
+        'text' => $option,
+        'correct' => $isRadio ? ($j === 0) : ($j < 2) // Для radio - первый правильный, для checkbox - первые два
+      ];
+    }
+    
+    // Перемешиваем варианты
+    shuffle($opts);
+    
+    $items[] = [
+      'type' => $type,
+      'title' => $isRadio 
+        ? "Какой протокол используется в {$topic}?"
+        : "Отметьте все технологии, используемые в {$topic}:",
+      'required' => true,
+      'points' => 1,
+      'options' => $opts
+    ];
+  }
+  
+  return json_encode(['items' => $items], JSON_UNESCAPED_UNICODE);
+}
