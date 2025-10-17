@@ -1,0 +1,11 @@
+{
+  "name": "ai-proxy-vercel",
+  "version": "1.0.0",
+  "type": "module",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "dev": "vercel dev",
+    "test": "node -e \"console.log('ok')\""
+  }
+}
