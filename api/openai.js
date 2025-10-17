@@ -50,3 +50,4 @@ module.exports = async (req, res) => {
     res.status(500).json({ error: String(err), hint: "Проверь ключ и что отправляешь POST c JSON" });
   }
 };
+ 
