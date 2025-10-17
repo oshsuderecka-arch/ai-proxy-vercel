@@ -1,7 +1,6 @@
-// api/openai.js — CommonJS, безопасный парсинг и понятные ответы
-module.exports = async (req, res) => {
+// ESM-версия: export default вместо module.exports
+export default async function handler(req, res) {
   try {
-    // Диагностика из браузера
     if (req.method === "GET") {
       res.status(200).json({ ok: true, usage: "POST JSON { model, messages }" });
       return;
@@ -11,7 +10,7 @@ module.exports = async (req, res) => {
       return;
     }
 
-    // Читаем сырой body (надёжно для serverless)
+    // читаем сырое тело
     let raw = "";
     await new Promise((resolve, reject) => {
       req.on("data", c => (raw += c));
@@ -26,7 +25,10 @@ module.exports = async (req, res) => {
     }
 
     const key = process.env.OPENAI_API_KEY;
-    if (!key) { res.status(500).json({ error: "OPENAI_API_KEY is not set" }); return; }
+    if (!key) {
+      res.status(500).json({ error: "OPENAI_API_KEY is not set" });
+      return;
+    }
 
     const model = payload.model || "gpt-4o-mini";
     const messages = payload.messages || [{ role: "user", content: "Hello!" }];
@@ -42,12 +44,11 @@ module.exports = async (req, res) => {
       body: JSON.stringify({ model, messages, temperature, max_tokens })
     });
 
-    const text = await upstream.text(); // не падаем, если upstream вернул не-JSON
+    const text = await upstream.text(); // не падаем, если не-JSON
     res.status(upstream.status);
     res.setHeader("Content-Type", "application/json");
     res.end(text);
   } catch (err) {
-    res.status(500).json({ error: String(err), hint: "Проверь ключ и что отправляешь POST c JSON" });
+    res.status(500).json({ error: String(err), hint: "Проверь ключ и POST JSON" });
   }
-};
- 
+}
