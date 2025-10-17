@@ -275,47 +275,9 @@ if ($gemini_key) {
   }
 }
 
-/* ---------- 3) Fallback (минимально пригодный) ---------- */
-function fallback_payload(array $messages): string {
-  // Пытаемся вытащить тему и число
-  $topic = 'тема курса';
-  $count = 6;
-  foreach ($messages as $m) {
-    if (!empty($m['content'])) {
-      if (preg_match('/Тема:\s*([^\n]+)/u', $m['content'], $mm)) $topic = trim($mm[1]);
-      if (preg_match('/Сгенерируй\s+(\d+)\s+вопрос/iu', $m['content'], $cm)) $count = max(3, min(12, (int)$cm[1]));
-    }
-  }
-  $items = [];
-  for ($i=1; $i<=$count; $i++) {
-    $isRadio = ($i % 2 === 1);
-    $opts = [];
-    // генерируем простые, но не запрещённые и «привязанные» к теме варианты
-    $variants = [
-      "{$topic}: базовое понятие",
-      "{$topic}: ключевой термин",
-      "{$topic}: пример применения",
-      "{$topic}: типичный инструмент",
-      "{$topic}: распространённая ошибка",
-      "{$topic}: верное утверждение",
-    ];
-    shuffle($variants);
-    $n = $isRadio ? 4 : 5;
-    for ($k=0; $k<$n; $k++) $opts[] = ['text'=>$variants[$k], 'correct'=>false];
-    if ($isRadio) { $opts[0]['correct'] = true; } else { $opts[0]['correct'] = $opts[1]['correct'] = true; }
-    $items[] = [
-      'type' => $isRadio ? 'radio' : 'checkbox',
-      'title'=> "Вопрос {$i} по теме {$topic}",
-      'required'=> true,
-      'points'=> 1,
-      'options'=> $opts
-    ];
-  }
-  return json_encode(['items'=>$items], JSON_UNESCAPED_UNICODE);
-}
-
+/* ---------- 3) НЕТ FALLBACK - ВЫДАЁМ ОШИБКУ ---------- */
+http_response_code(500);
 echo json_encode([
-  'ok' => true,
-  'text' => fallback_payload($messages),
-  'source' => 'fallback'
+  'ok' => false,
+  'error' => 'ИИ-сервисы недоступны. Проверьте API ключи и подключение к интернету. Fallback отключён для обеспечения качества.'
 ], JSON_UNESCAPED_UNICODE);
